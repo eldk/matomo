@@ -794,7 +794,7 @@ abstract class Base extends VisitDimension
 
         $result = $existing != $new;
         if ($result) {
-            Common::printDebug("Referrers\\Base::isReferrerInformationNew: detected change in $infoName ('$existing' != '$new').");
+            Common::printDebug("Referrers\Base::isReferrerInformationNew: detected change in $infoName ('$existing' != '$new').");
         }
 
         return $result;
