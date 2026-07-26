@@ -106,7 +106,8 @@ YAML;
         $visit = $this->trackVisit('https://www.qwant.com/', '');
 
         self::assertNotSame((string) Common::REFERRER_TYPE_AI_ASSISTANT, (string) $visit['referer_type']);
-        self::assertNotContains($visit['referer_name'], ['Qwant Chat IA', 'Qwant AI Flash'], true);
+        self::assertNotSame('Qwant Chat IA', $visit['referer_name']);
+        self::assertNotSame('Qwant AI Flash', $visit['referer_name']);
     }
 
     /**
@@ -120,9 +121,11 @@ YAML;
         $tracker->setUrl('https://matomo.org/' . ($query !== '' ? '?' . $query : ''));
         Fixture::checkResponse($tracker->doTrackPageView('Home'));
 
-        return Db::fetchRow(
+        $visits = Db::fetchAll(
             'SELECT referer_type, referer_name, referer_keyword, referer_url FROM ' . Common::prefixTable('log_visit')
         );
+
+        return $visits[0];
     }
 
     protected static function configureFixture($fixture)
