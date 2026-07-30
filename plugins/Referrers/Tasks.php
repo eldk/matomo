@@ -25,6 +25,7 @@ class Tasks extends \Piwik\Plugin\Tasks
             $this->weekly('updateSearchEngines');
             $this->weekly('updateSocials');
             $this->weekly('updateAIAssistants');
+            $this->weekly('updateAIAssistantSignatures');
         }
     }
 
@@ -67,7 +68,7 @@ class Tasks extends \Piwik\Plugin\Tasks
     }
 
     /**
-     * Update the AI definitions
+     * Update the legacy domain-only AI definitions.
      *
      * @see https://github.com/matomo-org/searchengine-and-social-list
      */
@@ -83,5 +84,29 @@ class Tasks extends \Piwik\Plugin\Tasks
             return;
         }
         Option::set(AIAssistant::OPTION_STORAGE_NAME, base64_encode(serialize($aiAssistants)));
+    }
+
+    /**
+     * Update supplemental parameter-qualified AI assistant signatures.
+     *
+     * @see https://github.com/matomo-org/searchengine-and-social-list
+     */
+    public function updateAIAssistantSignatures(): void
+    {
+        $url = 'https://raw.githubusercontent.com/matomo-org/searchengine-and-social-list/master/AIAssistantSignatures.yml';
+        $list = Http::sendHttpRequest($url, 30);
+        if (!is_string($list)) {
+            return;
+        }
+
+        $signatures = AIAssistant::getInstance()->loadSignatureYmlData($list);
+        if (empty($signatures)) {
+            return;
+        }
+
+        Option::set(
+            AIAssistant::SIGNATURE_OPTION_STORAGE_NAME,
+            base64_encode(serialize($signatures))
+        );
     }
 }
