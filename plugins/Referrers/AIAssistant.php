@@ -23,18 +23,19 @@ use Piwik\Singleton;
 class AIAssistant extends Singleton
 {
     public const OPTION_STORAGE_NAME = 'AIAssistantDefinitions';
+    public const SIGNATURE_OPTION_STORAGE_NAME = 'AIAssistantSignatureDefinitions';
 
-    /** @var string location of definition file (relative to PIWIK_INCLUDE_PATH) */
+    /** @var string location of legacy definition file (relative to PIWIK_INCLUDE_PATH) */
     public const DEFINITION_FILE = '/vendor/matomo/searchengine-and-social-list/AIAssistants.yml';
+
+    /** @var string location of supplemental signature file (relative to PIWIK_INCLUDE_PATH) */
+    public const SIGNATURE_DEFINITION_FILE = '/vendor/matomo/searchengine-and-social-list/AIAssistantSignatures.yml';
 
     /** @var null|array<string, string> */
     protected $definitionList = null;
 
     /** @var null|array<int, array<string, mixed>> */
     protected $signatureList = null;
-
-    /** @var null|array<string, array<int, mixed>> */
-    protected $storageData = null;
 
     /**
      * Returns list of AI assistants by unconditional URL.
@@ -43,48 +44,47 @@ class AIAssistant extends Singleton
      */
     public function getDefinitions(): array
     {
-        $this->ensureDefinitionsLoaded();
+        $cache = Cache::getEagerCache();
+        $cacheId = 'AIAssistant-' . self::OPTION_STORAGE_NAME;
 
-        return $this->definitionList ?? [];
+        if ($cache->contains($cacheId)) {
+            /** @var array<string, string> $list */
+            $list = $cache->fetch($cacheId);
+        } else {
+            $list = $this->loadDefinitions();
+            $cache->save($cacheId, $list);
+        }
+
+        return $list;
     }
 
     /**
-     * Returns all AI assistant signatures.
+     * Returns supplemental parameter-qualified AI assistant signatures.
      *
      * @return array<int, array<string, mixed>>
      */
     public function getSignatures(): array
     {
-        $this->ensureDefinitionsLoaded();
-
-        return $this->signatureList ?? [];
-    }
-
-    private function ensureDefinitionsLoaded(): void
-    {
-        if ($this->definitionList !== null && $this->signatureList !== null) {
-            return;
-        }
-
         $cache = Cache::getEagerCache();
-        $cacheId = 'AIAssistant-' . self::OPTION_STORAGE_NAME;
+        $cacheId = 'AIAssistant-' . self::SIGNATURE_OPTION_STORAGE_NAME;
 
         if ($cache->contains($cacheId)) {
+            /** @var array<int, array<string, mixed>> $list */
             $list = $cache->fetch($cacheId);
-            if (is_array($list)) {
-                $this->loadStoredData($list);
-            }
+        } else {
+            $list = $this->loadSignatures();
+            $cache->save($cacheId, $list);
         }
 
-        if ($this->definitionList === null || $this->signatureList === null) {
-            $this->loadDefinitions();
-            $cache->save($cacheId, $this->storageData ?? []);
-        }
+        return $list;
     }
 
-    private function loadDefinitions(): void
+    /**
+     * @return array<string, string>
+     */
+    private function loadDefinitions(): array
     {
-        if ($this->definitionList === null || $this->signatureList === null) {
+        if ($this->definitionList === null) {
             $referrerDefinitionSyncOpt = Config::getInstance()->General['enable_referrer_definition_syncs'];
 
             if ($referrerDefinitionSyncOpt == 1) {
@@ -95,105 +95,115 @@ class AIAssistant extends Singleton
         }
 
         Piwik::postEvent('Referrer.addAIAssistantUrls', [&$this->definitionList]);
-        $this->addMissingUnconditionalSignatures();
-        $this->storageData = $this->buildStorageDataFromSignatures();
+
+        return $this->definitionList ?? [];
     }
 
     /**
-     * Loads definitions sourced from remote yaml with a local fallback.
+     * @return array<int, array<string, mixed>>
+     */
+    private function loadSignatures(): array
+    {
+        if ($this->signatureList === null) {
+            $referrerDefinitionSyncOpt = Config::getInstance()->General['enable_referrer_definition_syncs'];
+
+            if ($referrerDefinitionSyncOpt == 1) {
+                $this->loadRemoteSignatures();
+            } else {
+                $this->loadLocalSignatureYmlData();
+            }
+        }
+
+        return $this->signatureList ?? [];
+    }
+
+    /**
+     * Loads legacy definitions sourced from remote YAML with a local fallback.
      */
     private function loadRemoteDefinitions(): void
     {
-        // Read first from the auto-updated list in database
         $list = Option::get(self::OPTION_STORAGE_NAME);
 
         if ($list && SettingsPiwik::isInternetEnabled()) {
             $list = Common::safe_unserialize(base64_decode($list));
             if (!empty($list) && is_array($list)) {
-                $this->loadStoredData($list);
+                $this->definitionList = $list;
             }
         } else {
-            // Fallback to reading the bundled list
             $this->loadLocalYmlData();
-            Option::set(self::OPTION_STORAGE_NAME, base64_encode(serialize($this->storageData)));
+            Option::set(self::OPTION_STORAGE_NAME, base64_encode(serialize($this->definitionList)));
         }
     }
 
     /**
-     * Loads the definition data from the local definitions file.
+     * Loads supplemental signatures sourced from remote YAML with a local fallback.
      */
+    private function loadRemoteSignatures(): void
+    {
+        $list = Option::get(self::SIGNATURE_OPTION_STORAGE_NAME);
+
+        if ($list && SettingsPiwik::isInternetEnabled()) {
+            $list = Common::safe_unserialize(base64_decode($list));
+            if (!empty($list) && is_array($list)) {
+                $this->signatureList = $list;
+            }
+        } else {
+            $this->loadLocalSignatureYmlData();
+            Option::set(self::SIGNATURE_OPTION_STORAGE_NAME, base64_encode(serialize($this->signatureList)));
+        }
+    }
+
     private function loadLocalYmlData(): void
     {
         $yml = file_get_contents(PIWIK_INCLUDE_PATH . self::DEFINITION_FILE);
         if ($yml !== false) {
-            $this->loadYmlData($yml);
+            $this->definitionList = $this->loadYmlData($yml);
+        }
+    }
+
+    private function loadLocalSignatureYmlData(): void
+    {
+        $path = PIWIK_INCLUDE_PATH . self::SIGNATURE_DEFINITION_FILE;
+        if (!file_exists($path)) {
+            $this->signatureList = [];
+            return;
+        }
+
+        $yml = file_get_contents($path);
+        if ($yml !== false) {
+            $this->signatureList = $this->loadSignatureYmlData($yml);
         }
     }
 
     /**
-     * Parses the given YML string and caches the resulting definitions.
+     * Parses the legacy domain-only YML data.
      *
-     * The returned data is suitable for storage by the definition sync task.
-     *
-     * @return null|array<string, array<int, mixed>>
+     * @return null|array<string, string>
      */
     public function loadYmlData(string $yml): ?array
     {
         $ais = \Spyc::YAMLLoadString($yml);
 
         if (is_array($ais)) {
-            $this->loadStructuredData($ais);
+            $this->definitionList = $this->transformData($ais);
         }
 
-        return $this->storageData;
+        return $this->definitionList;
     }
 
     /**
-     * Loads either the current structured storage format or the legacy flat domain map.
+     * Parses supplemental parameter-qualified signature YML data.
      *
-     * @param array<mixed> $data
+     * @return null|array<int, array<string, mixed>>
      */
-    private function loadStoredData(array $data): void
+    public function loadSignatureYmlData(string $yml): ?array
     {
-        if ($this->isLegacyFlatDefinitionList($data)) {
-            $structured = [];
-            foreach ($data as $url => $name) {
-                $structured[$name][] = $url;
-            }
-            $this->loadStructuredData($structured);
-            return;
+        $ais = \Spyc::YAMLLoadString($yml);
+        if (!is_array($ais)) {
+            return $this->signatureList;
         }
 
-        $this->loadStructuredData($data);
-    }
-
-    /**
-     * @param array<mixed> $data
-     */
-    private function isLegacyFlatDefinitionList(array $data): bool
-    {
-        if ($data === []) {
-            return false;
-        }
-
-        foreach ($data as $url => $name) {
-            if (!is_string($url) || !is_string($name)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * @param array<string, mixed> $ais
-     */
-    private function loadStructuredData(array $ais): void
-    {
-        $this->definitionList = [];
         $this->signatureList = [];
-        $this->storageData = [];
-
         foreach ($ais as $name => $entries) {
             if (!is_string($name) || empty($entries) || !is_array($entries)) {
                 continue;
@@ -201,20 +211,34 @@ class AIAssistant extends Singleton
 
             foreach ($entries as $entry) {
                 $signature = $this->normalizeSignature($name, $entry);
-                if ($signature === null) {
-                    continue;
-                }
-
-                $this->signatureList[] = $signature;
-                $this->storageData[$name][] = $this->signatureToStorageEntry($signature);
-
-                if (empty($signature['landing_params'])) {
-                    foreach ($signature['urls'] as $url) {
-                        $this->definitionList[$url] = $name;
-                    }
+                if ($signature !== null) {
+                    $this->signatureList[] = $signature;
                 }
             }
         }
+
+        return $this->signatureList;
+    }
+
+    /**
+     * @param array<string, string[]> $ais
+     * @return array<string, string>
+     */
+    protected function transformData(array $ais): array
+    {
+        $urlToName = [];
+        foreach ($ais as $name => $urls) {
+            if (empty($urls) || !is_array($urls)) {
+                continue;
+            }
+
+            foreach ($urls as $url) {
+                if (is_string($url)) {
+                    $urlToName[$url] = $name;
+                }
+            }
+        }
+        return $urlToName;
     }
 
     /**
@@ -223,43 +247,28 @@ class AIAssistant extends Singleton
      */
     private function normalizeSignature(string $name, $entry): ?array
     {
-        if (is_string($entry) && $entry !== '') {
-            return [
-                'name' => $name,
-                'urls' => [$entry],
-                'landing_params' => [],
-                'allow_empty_referrer' => false,
-            ];
-        }
-
         if (!is_array($entry)) {
             return null;
         }
 
         $urls = [];
-        if (!empty($entry['urls']) && is_array($entry['urls'])) {
-            foreach ($entry['urls'] as $url) {
-                if (is_string($url) && $url !== '') {
-                    $urls[] = $url;
-                }
+        foreach ($entry['urls'] ?? [] as $url) {
+            if (is_string($url) && $url !== '') {
+                $urls[] = $url;
             }
         }
 
         $landingParams = [];
-        if (!empty($entry['landing_params']) && is_array($entry['landing_params'])) {
-            foreach ($entry['landing_params'] as $parameter => $values) {
-                if (!is_string($parameter) || $parameter === '') {
-                    continue;
-                }
-
-                if (!is_array($values)) {
-                    $values = [$values];
-                }
-
-                foreach ($values as $value) {
-                    if (is_scalar($value)) {
-                        $landingParams[mb_strtolower(trim($parameter))][] = mb_strtolower(trim((string) $value));
-                    }
+        foreach ($entry['landing_params'] ?? [] as $parameter => $values) {
+            if (!is_string($parameter) || $parameter === '') {
+                continue;
+            }
+            if (!is_array($values)) {
+                $values = [$values];
+            }
+            foreach ($values as $value) {
+                if (is_scalar($value)) {
+                    $landingParams[mb_strtolower(trim($parameter))][] = mb_strtolower(trim((string) $value));
                 }
             }
         }
@@ -277,73 +286,6 @@ class AIAssistant extends Singleton
     }
 
     /**
-     * @param array<string, mixed> $signature
-     * @return mixed
-     */
-    private function signatureToStorageEntry(array $signature)
-    {
-        if (
-            empty($signature['landing_params'])
-            && empty($signature['allow_empty_referrer'])
-            && count($signature['urls']) === 1
-        ) {
-            return reset($signature['urls']);
-        }
-
-        $entry = [];
-        if (!empty($signature['urls'])) {
-            $entry['urls'] = array_values($signature['urls']);
-        }
-        if (!empty($signature['allow_empty_referrer'])) {
-            $entry['allow_empty_referrer'] = true;
-        }
-        if (!empty($signature['landing_params'])) {
-            $entry['landing_params'] = $signature['landing_params'];
-        }
-
-        return $entry;
-    }
-
-    private function addMissingUnconditionalSignatures(): void
-    {
-        foreach ($this->definitionList ?? [] as $url => $name) {
-            $found = false;
-            foreach ($this->signatureList ?? [] as $signature) {
-                if (
-                    $signature['name'] === $name
-                    && empty($signature['landing_params'])
-                    && in_array($url, $signature['urls'], true)
-                ) {
-                    $found = true;
-                    break;
-                }
-            }
-
-            if (!$found) {
-                $this->signatureList[] = [
-                    'name' => $name,
-                    'urls' => [$url],
-                    'landing_params' => [],
-                    'allow_empty_referrer' => false,
-                ];
-            }
-        }
-    }
-
-    /**
-     * @return array<string, array<int, mixed>>
-     */
-    private function buildStorageDataFromSignatures(): array
-    {
-        $storageData = [];
-        foreach ($this->signatureList ?? [] as $signature) {
-            $storageData[$signature['name']][] = $this->signatureToStorageEntry($signature);
-        }
-
-        return $storageData;
-    }
-
-    /**
      * Returns the assistant name matching the referrer and landing query.
      *
      * @return string|false
@@ -353,15 +295,13 @@ class AIAssistant extends Singleton
         $landingParameters = $this->parseLandingParameters($landingQuery);
 
         foreach ($this->getSignatures() as $signature) {
-            if (!$this->signatureMatchesLandingParameters($signature, $landingParameters)) {
-                continue;
+            if ($this->signatureMatches($signature, $referrerUrl, $landingParameters)) {
+                return $signature['name'];
             }
+        }
 
-            if (!$this->signatureMatchesReferrer($signature, $referrerUrl)) {
-                continue;
-            }
-
-            return $signature['name'];
+        if ($this->isAIAssistantUrl($referrerUrl)) {
+            return $this->getAIAssistantFromDomain($referrerUrl);
         }
 
         // Backward compatibility for assistants that send a known hostname as utm_source.
@@ -402,26 +342,14 @@ class AIAssistant extends Singleton
      * @param array<string, mixed> $signature
      * @param array<string, string[]> $landingParameters
      */
-    private function signatureMatchesLandingParameters(array $signature, array $landingParameters): bool
+    private function signatureMatches(array $signature, string $referrerUrl, array $landingParameters): bool
     {
         foreach ($signature['landing_params'] as $parameter => $acceptedValues) {
-            if (empty($landingParameters[$parameter])) {
-                return false;
-            }
-
-            if (!array_intersect($acceptedValues, $landingParameters[$parameter])) {
+            if (empty($landingParameters[$parameter]) || !array_intersect($acceptedValues, $landingParameters[$parameter])) {
                 return false;
             }
         }
 
-        return true;
-    }
-
-    /**
-     * @param array<string, mixed> $signature
-     */
-    private function signatureMatchesReferrer(array $signature, string $referrerUrl): bool
-    {
         if (empty($signature['urls'])) {
             return !empty($signature['landing_params']);
         }
@@ -444,12 +372,6 @@ class AIAssistant extends Singleton
         return (bool) preg_match('#(^|[\.\/])' . preg_quote($definition, '#') . '(\/|$)#i', $url);
     }
 
-    /**
-     * Returns true if a URL belongs unconditionally to an AI assistant, false otherwise.
-     *
-     * @param string $url The URL to check.
-     * @param string|null $aiAssistantName The name of the AI assistant to check for, or null to check for any.
-     */
     public function isAIAssistantUrl(string $url, ?string $aiAssistantName = null): bool
     {
         foreach ($this->getDefinitions() as $domain => $name) {
@@ -461,9 +383,6 @@ class AIAssistant extends Singleton
         return false;
     }
 
-    /**
-     * Gets AI assistant name from an unconditional URL definition.
-     */
     public function getAIAssistantFromDomain(string $url): string
     {
         foreach ($this->getDefinitions() as $domain => $name) {
@@ -475,9 +394,6 @@ class AIAssistant extends Singleton
         return Piwik::translate('General_Unknown');
     }
 
-    /**
-     * Returns the main url of the AI assistant the given url matches.
-     */
     public function getMainUrl(string $url): string
     {
         $ai = $this->getAIAssistantFromDomain($url);
@@ -489,9 +405,6 @@ class AIAssistant extends Singleton
         return $url;
     }
 
-    /**
-     * Returns the main url of the given AI assistant.
-     */
     public function getMainUrlFromName(string $aiAssistant): ?string
     {
         foreach ($this->getDefinitions() as $domain => $name) {
@@ -518,6 +431,7 @@ class AIAssistant extends Singleton
     {
         $ai = $this->getAIAssistantFromDomain($url);
         $ais = $this->getDefinitions();
+
         $filePattern = 'plugins/Morpheus/icons/dist/aiAssistants/%s.png';
 
         $aiDomains = array_keys($ais, $ai);
