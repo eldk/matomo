@@ -79,9 +79,7 @@ YAML;
     {
         $legacy = file_get_contents(PIWIK_PATH_TEST_TO_ROOT . AIAssistant::DEFINITION_FILE);
         AIAssistant::getInstance()->loadYmlData($legacy);
-
-        $signaturePath = PIWIK_PATH_TEST_TO_ROOT . AIAssistant::SIGNATURE_DEFINITION_FILE;
-        AIAssistant::getInstance()->loadSignatureYmlData(file_exists($signaturePath) ? file_get_contents($signaturePath) : '');
+        AIAssistant::getInstance()->loadSignatureYmlData(self::SIGNATURES);
         parent::tearDown();
     }
 
@@ -127,15 +125,18 @@ YAML;
         self::assertSame('Lilo Chat IA', $visit['referer_name']);
     }
 
-    public function testOrdinarySharedSearchDomainsAreNotAttributedToAiAssistant(): void
+    public function testOrdinaryQwantSearchIsNotAttributedToAiAssistant(): void
     {
-        $qwant = $this->trackVisit('https://www.qwant.com/', '');
-        self::assertNotSame((string) Common::REFERRER_TYPE_AI_ASSISTANT, (string) $qwant['referer_type']);
+        $visit = $this->trackVisit('https://www.qwant.com/', '');
 
-        Db::query('DELETE FROM ' . Common::prefixTable('log_visit'));
+        self::assertNotSame((string) Common::REFERRER_TYPE_AI_ASSISTANT, (string) $visit['referer_type']);
+    }
 
-        $lilo = $this->trackVisit('https://search.lilo.org/', '');
-        self::assertNotSame((string) Common::REFERRER_TYPE_AI_ASSISTANT, (string) $lilo['referer_type']);
+    public function testOrdinaryLiloSearchIsNotAttributedToAiAssistant(): void
+    {
+        $visit = $this->trackVisit('https://search.lilo.org/', '');
+
+        self::assertNotSame((string) Common::REFERRER_TYPE_AI_ASSISTANT, (string) $visit['referer_type']);
     }
 
     /**
