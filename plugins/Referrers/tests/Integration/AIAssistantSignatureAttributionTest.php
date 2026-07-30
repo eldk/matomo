@@ -22,13 +22,15 @@ use Piwik\Tests\Framework\TestCase\IntegrationTestCase;
  */
 class AIAssistantSignatureAttributionTest extends IntegrationTestCase
 {
-    private const DEFINITIONS = <<<'YAML'
+    private const LEGACY_DEFINITIONS = <<<'YAML'
 ChatGPT:
   - chatgpt.com
 Perplexity:
-  -
-    urls:
-      - perplexity.ai
+  - perplexity.ai
+YAML;
+
+    private const SIGNATURES = <<<'YAML'
+Perplexity:
   -
     landing_params:
       utm_source:
@@ -55,18 +57,31 @@ Qwant Chat IA:
         - qwant
       utm_campaign:
         - ai_chat
+Lilo Chat IA:
+  -
+    urls:
+      - search.lilo.org
+    landing_params:
+      utm_source:
+        - lilo
+      utm_campaign:
+        - ai_chat
 YAML;
 
     protected function setUp(): void
     {
         parent::setUp();
-        AIAssistant::getInstance()->loadYmlData(self::DEFINITIONS);
+        AIAssistant::getInstance()->loadYmlData(self::LEGACY_DEFINITIONS);
+        AIAssistant::getInstance()->loadSignatureYmlData(self::SIGNATURES);
     }
 
     protected function tearDown(): void
     {
-        $yml = file_get_contents(PIWIK_PATH_TEST_TO_ROOT . AIAssistant::DEFINITION_FILE);
-        AIAssistant::getInstance()->loadYmlData($yml);
+        $legacy = file_get_contents(PIWIK_PATH_TEST_TO_ROOT . AIAssistant::DEFINITION_FILE);
+        AIAssistant::getInstance()->loadYmlData($legacy);
+
+        $signaturePath = PIWIK_PATH_TEST_TO_ROOT . AIAssistant::SIGNATURE_DEFINITION_FILE;
+        AIAssistant::getInstance()->loadSignatureYmlData(file_exists($signaturePath) ? file_get_contents($signaturePath) : '');
         parent::tearDown();
     }
 
@@ -101,13 +116,26 @@ YAML;
         self::assertSame('Qwant AI Flash', $visit['referer_name']);
     }
 
-    public function testOrdinaryQwantReferrerIsNotAttributedToAiAssistant(): void
+    public function testLiloChatIaIsAttributedFromObservedSignature(): void
     {
-        $visit = $this->trackVisit('https://www.qwant.com/', '');
+        $visit = $this->trackVisit(
+            'https://search.lilo.org/',
+            'utm_source=lilo&utm_medium=referral&utm_campaign=ai_chat'
+        );
 
-        self::assertNotSame((string) Common::REFERRER_TYPE_AI_ASSISTANT, (string) $visit['referer_type']);
-        self::assertNotSame('Qwant Chat IA', $visit['referer_name']);
-        self::assertNotSame('Qwant AI Flash', $visit['referer_name']);
+        self::assertSame((string) Common::REFERRER_TYPE_AI_ASSISTANT, (string) $visit['referer_type']);
+        self::assertSame('Lilo Chat IA', $visit['referer_name']);
+    }
+
+    public function testOrdinarySharedSearchDomainsAreNotAttributedToAiAssistant(): void
+    {
+        $qwant = $this->trackVisit('https://www.qwant.com/', '');
+        self::assertNotSame((string) Common::REFERRER_TYPE_AI_ASSISTANT, (string) $qwant['referer_type']);
+
+        Db::query('DELETE FROM ' . Common::prefixTable('log_visit'));
+
+        $lilo = $this->trackVisit('https://search.lilo.org/', '');
+        self::assertNotSame((string) Common::REFERRER_TYPE_AI_ASSISTANT, (string) $lilo['referer_type']);
     }
 
     /**
