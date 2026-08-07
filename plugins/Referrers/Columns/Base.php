@@ -401,35 +401,30 @@ abstract class Base extends VisitDimension
             $cachedReferrerAIAssistants = $cache->fetch($cacheKey);
         }
 
-        // Some AI like ChatGPT are sending their hostname as `utm_source`
-        $utmSource = UrlHelper::getParameterFromQueryString($this->currentUrlParse['query'] ?? '', 'utm_source');
+        $landingQuery = $this->currentUrlParse['query'] ?? '';
+        $classificationCacheKey = hash('sha256', $this->referrerUrl . "\n" . $landingQuery);
 
-        $aiAssistantName = false;
-        if (isset($cachedReferrerAIAssistants[$this->referrerUrl])) {
-            $aiAssistantName = $cachedReferrerAIAssistants[$this->referrerUrl];
+        if (array_key_exists($classificationCacheKey, $cachedReferrerAIAssistants)) {
+            $aiAssistantName = $cachedReferrerAIAssistants[$classificationCacheKey];
         } else {
-            if (AIAssistantDetection::getInstance()->isAIAssistantUrl($this->referrerUrl)) {
-                $aiAssistantName = AIAssistantDetection::getInstance()->getAIAssistantFromDomain($this->referrerUrl);
+            $aiAssistantName = AIAssistantDetection::getInstance()->getAIAssistantFromRequest(
+                $this->referrerUrl,
+                $landingQuery
+            );
 
-                /**
-                 * Triggered when detecting the AI of a referrer URL.
-                 *
-                 * Plugins can use this event to provide custom AI detection logic.
-                 *
-                 * @param string|false &$aiAssistantName Name of the AI Assistant, or false if none detected
-                 *
-                 *                                        This parameter is initialized to the results
-                 *                                        of Matomo's default AI detection
-                 *                                        logic.
-                 * @param string referrerUrl The referrer URL from the tracking request.
-                 */
-                Piwik::postEvent('Tracker.detectReferrerAIAssistant', [&$aiAssistantName, $this->referrerUrl]);
+            /**
+             * Triggered when detecting the AI of a referrer URL and landing query.
+             *
+             * Plugins can use this event to provide custom AI detection logic.
+             *
+             * @param string|false &$aiAssistantName Name of the AI Assistant, or false if none detected
+             * @param string referrerUrl The referrer URL from the tracking request.
+             * @param string landingQuery The landing page query string.
+             */
+            Piwik::postEvent('Tracker.detectReferrerAIAssistant', [&$aiAssistantName, $this->referrerUrl, $landingQuery]);
 
-                $cachedReferrerAIAssistants[$this->referrerUrl] = $aiAssistantName;
-                $cache->save($cacheKey, $cachedReferrerAIAssistants);
-            } elseif ($utmSource && AIAssistantDetection::getInstance()->isAIAssistantUrl($utmSource)) {
-                $aiAssistantName = AIAssistantDetection::getInstance()->getAIAssistantFromDomain($utmSource);
-            }
+            $cachedReferrerAIAssistants[$classificationCacheKey] = $aiAssistantName;
+            $cache->save($cacheKey, $cachedReferrerAIAssistants);
         }
 
         if ($aiAssistantName === false) {
